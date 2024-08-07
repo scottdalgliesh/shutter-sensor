@@ -9,12 +9,16 @@ use esp_hal::{
     clock::ClockControl,
     peripherals::Peripherals,
     prelude::*,
+    rng::Rng,
     system::SystemControl,
-    timer::{ErasedTimer, OneShotTimer, PeriodicTimer},
+    timer::{systimer::SystemTimer, timg::TimerGroup, ErasedTimer, OneShotTimer, PeriodicTimer},
 };
-use esp_wifi::wifi::{
-    ClientConfiguration, Configuration, WifiController, WifiDevice, WifiEvent, WifiStaDevice,
-    WifiState,
+use esp_wifi::{
+    wifi::{
+        new_with_mode, ClientConfiguration, Configuration, WifiController, WifiDevice, WifiEvent,
+        WifiStaDevice, WifiState,
+    },
+    EspWifiInitFor,
 };
 
 // When you are okay with using a nightly compiler it's better to use https://docs.rs/static_cell/2.1.0/static_cell/macro.make_static.html
@@ -36,30 +40,28 @@ async fn main(spawner: Spawner) -> ! {
     esp_println::logger::init_logger_from_env();
 
     let peripherals = Peripherals::take();
-
     let system = SystemControl::new(peripherals.SYSTEM);
+    let systimer = SystemTimer::new(peripherals.SYSTIMER);
+    let mut rng = Rng::new(peripherals.RNG);
     let clocks = ClockControl::max(system.clock_control).freeze();
-
     let timer = PeriodicTimer::new(
-        esp_hal::timer::timg::TimerGroup::new(peripherals.TIMG0, &clocks, None)
+        TimerGroup::new(peripherals.TIMG0, &clocks, None)
             .timer0
             .into(),
     );
 
     let init = esp_wifi::initialize(
-        esp_wifi::EspWifiInitFor::Wifi,
+        EspWifiInitFor::Wifi,
         timer,
-        esp_hal::rng::Rng::new(peripherals.RNG),
+        rng,
         peripherals.RADIO_CLK,
         &clocks,
     )
     .unwrap();
 
-    let wifi = peripherals.WIFI;
     let (wifi_interface, controller) =
-        esp_wifi::wifi::new_with_mode(&init, wifi, WifiStaDevice).unwrap();
+        new_with_mode(&init, peripherals.WIFI, WifiStaDevice).unwrap();
 
-    let systimer = esp_hal::timer::systimer::SystemTimer::new(peripherals.SYSTIMER);
     esp_hal_embassy::init(
         &clocks,
         mk_static!(
@@ -69,9 +71,7 @@ async fn main(spawner: Spawner) -> ! {
     );
 
     let config = Config::dhcpv4(Default::default());
-    let seed = 1234; // very random, very secure seed
-
-    // Init network stack
+    let seed = rng.random().into();
     let stack = &*mk_static!(
         Stack<WifiDevice<'_, WifiStaDevice>>,
         Stack::new(
@@ -83,7 +83,7 @@ async fn main(spawner: Spawner) -> ! {
     );
 
     spawner.spawn(connection(controller)).ok();
-    spawner.spawn(net_task(&stack)).ok();
+    spawner.spawn(net_task(stack)).ok();
 
     let mut rx_buffer = [0; 4096];
     let mut tx_buffer = [0; 4096];
@@ -106,9 +106,7 @@ async fn main(spawner: Spawner) -> ! {
 
     loop {
         Timer::after(Duration::from_millis(1_000)).await;
-
-        let mut socket = TcpSocket::new(&stack, &mut rx_buffer, &mut tx_buffer);
-
+        let mut socket = TcpSocket::new(stack, &mut rx_buffer, &mut tx_buffer);
         socket.set_timeout(Some(embassy_time::Duration::from_secs(10)));
 
         let remote_endpoint = (Ipv4Address::new(142, 250, 185, 115), 80);
@@ -160,13 +158,10 @@ async fn connection(mut controller: WifiController<'static>) {
     log::info!("start connection task");
     log::info!("Device capabilities: {:?}", controller.get_capabilities());
     loop {
-        match esp_wifi::wifi::get_wifi_state() {
-            WifiState::StaConnected => {
-                // wait until we're no longer connected
-                controller.wait_for_event(WifiEvent::StaDisconnected).await;
-                Timer::after(Duration::from_millis(5000)).await
-            }
-            _ => {}
+        if esp_wifi::wifi::get_wifi_state() == WifiState::StaConnected {
+            // wait until we're no longer connected
+            controller.wait_for_event(WifiEvent::StaDisconnected).await;
+            Timer::after(Duration::from_millis(5000)).await
         }
         if !matches!(controller.is_started(), Ok(true)) {
             let client_config = Configuration::Client(ClientConfiguration {
