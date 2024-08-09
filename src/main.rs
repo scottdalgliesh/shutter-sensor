@@ -1,9 +1,12 @@
 #![no_std]
 #![no_main]
 
+use core::fmt::Write;
 use embassy_executor::Spawner;
-use embassy_net::{tcp::TcpSocket, Config, Ipv4Address, Stack, StackResources};
-use embassy_time::{Duration, Timer};
+use embassy_net::dns::DnsSocket;
+use embassy_net::tcp::client::{TcpClient, TcpClientState};
+use embassy_net::{Config, Stack, StackResources};
+use embassy_time::{with_timeout, Duration, Timer};
 use esp_backtrace as _;
 use esp_hal::{
     clock::ClockControl,
@@ -20,6 +23,8 @@ use esp_wifi::{
     },
     EspWifiInitFor,
 };
+use heapless::String;
+use reqwless::{client::HttpClient, request};
 
 // When you are okay with using a nightly compiler it's better to use https://docs.rs/static_cell/2.1.0/static_cell/macro.make_static.html
 macro_rules! mk_static {
@@ -31,9 +36,10 @@ macro_rules! mk_static {
     }};
 }
 
-// TODO: automatically set environment variables at run time
+// TODO: automatically set environment variables at compile time from .env file
 const SSID: &str = env!("SSID");
 const PASSWORD: &str = env!("PASSWORD");
+const BASE_URL: &str = env!("URL"); //example: `XXX.XXX.XX.XX:3000`
 
 #[main]
 async fn main(spawner: Spawner) -> ! {
@@ -86,12 +92,8 @@ async fn main(spawner: Spawner) -> ! {
     spawner.spawn(net_task(stack)).ok();
 
     let mut rx_buffer = [0; 4096];
-    let mut tx_buffer = [0; 4096];
 
-    loop {
-        if stack.is_link_up() {
-            break;
-        }
+    while !stack.is_link_up() {
         Timer::after(Duration::from_millis(500)).await;
     }
 
@@ -104,53 +106,53 @@ async fn main(spawner: Spawner) -> ! {
         Timer::after(Duration::from_millis(500)).await;
     }
 
-    loop {
-        Timer::after(Duration::from_millis(1_000)).await;
-        let mut socket = TcpSocket::new(stack, &mut rx_buffer, &mut tx_buffer);
-        socket.set_timeout(Some(embassy_time::Duration::from_secs(10)));
+    // TODO: when embassy_net 0.5.0 is released: `tcp_client.set_timeout(Some(Duration::from_millis(10_000)));`
+    // Once implemented, the match arms below can be simplified
+    let client_state = TcpClientState::<1, 1024, 1024>::new();
+    let tcp_client = TcpClient::new(stack, &client_state);
+    let dns_client = DnsSocket::new(stack);
+    let mut http_client = HttpClient::new(&tcp_client, &dns_client);
 
-        let remote_endpoint = (Ipv4Address::new(142, 250, 185, 115), 80);
-        log::info!("connecting...");
-        let r = socket.connect(remote_endpoint).await;
-        if let Err(e) = r {
-            log::info!("connect error: {:?}", e);
-            continue;
-        }
-        log::info!("connected!");
-        let mut buf = [0; 1024];
-        loop {
-            use embedded_io_async::Write;
-            let r = socket
-                .write_all(b"GET / HTTP/1.0\r\nHost: www.mobile-j.de\r\n\r\n")
-                .await;
-            if let Err(e) = r {
-                log::info!("write error: {:?}", e);
-                break;
+    loop {
+        // TODO: replace with actual status and ID from MCU
+        let id = 1;
+        let status = true;
+
+        log::info!("Building URL");
+        let mut url = String::<128>::new();
+        match write!(&mut url, "http://{BASE_URL}/api/{id}/{status}") {
+            Ok(url) => url,
+            Err(e) => {
+                log::error!("Failed to build URL: {:?}", e);
+                Timer::after(Duration::from_secs(5)).await;
+                continue;
             }
-            let n = match socket.read(&mut buf).await {
-                Ok(0) => {
-                    log::info!("read EOF");
-                    break;
-                }
-                Ok(n) => n,
+        };
+        log::info!("url: {url}");
+
+        log::info!("Making request");
+        let timeout = with_timeout(Duration::from_secs(10), async {
+            let mut request = match http_client.request(request::Method::POST, &url).await {
+                Ok(req) => req,
                 Err(e) => {
-                    log::info!("read error: {:?}", e);
-                    break;
+                    log::error!("Failed to make HTTP request: {:?}", e);
+                    return;
                 }
             };
-            log::info!("{}", core::str::from_utf8(&buf[..n]).unwrap());
-        }
-        Timer::after(Duration::from_millis(3000)).await;
-    }
+            match request.send(&mut rx_buffer).await {
+                Ok(resp) => log::info!("Response status: {:?}", resp.status),
+                Err(e) => {
+                    log::error!("Failed to send HTTP request: {:?}", e);
+                }
+            };
+        })
+        .await;
 
-    // let delay = Delay::new(&clocks);
-    // let io = Io::new(peripherals.GPIO, peripherals.IO_MUX);
-    // let hall_sensor = Input::new(io.pins.gpio10, esp_hal::gpio::Pull::Up);
-    // loop {
-    //     let status = hall_sensor.get_level();
-    //     log::info!("Sensor status: {:?}", status);
-    //     delay.delay(500.millis());
-    // }
+        if timeout.is_err() {
+            log::error!("Request failed: Timeout")
+        };
+        Timer::after(Duration::from_millis(15_000)).await;
+    }
 }
 
 #[embassy_executor::task]

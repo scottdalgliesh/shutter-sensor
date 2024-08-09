@@ -8,6 +8,7 @@ license = "MIT OR Apache-2.0"
 [dependencies]
 embassy-executor = { version = "0.5.0", features = ["task-arena-size-40960"] }
 embassy-net = { version = "0.4.0", features = [
+    "dns",
     "tcp",
     "udp",
     "dhcpv4",
@@ -46,6 +47,7 @@ smoltcp = { version = "0.11.0", default-features = false, features = [
     "socket-udp",
 ] }
 static_cell = { version = "2.1.0", features = ["nightly"] }
+reqwless = "0.12.1"
 
 [profile.dev]
 # Rust debug is too slow.
