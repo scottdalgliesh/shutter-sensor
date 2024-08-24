@@ -10,6 +10,7 @@ use embassy_time::{with_timeout, Duration, Timer};
 use esp_backtrace as _;
 use esp_hal::clock::Clocks;
 use esp_hal::peripherals::{RADIO_CLK, TIMG0, WIFI};
+use esp_hal::reset::software_reset;
 use esp_hal::{
     clock::ClockControl,
     peripherals::Peripherals,
@@ -78,7 +79,6 @@ async fn main(spawner: Spawner) -> ! {
     // Once implemented, the match arms below can be simplified
 
     // create http_client to manage HTTP requests
-    let mut rx_buffer = [0; 4096];
     let client_state = TcpClientState::<1, 1024, 1024>::new();
     let tcp_client = TcpClient::new(stack, &client_state);
     let dns_client = DnsSocket::new(stack);
@@ -89,39 +89,8 @@ async fn main(spawner: Spawner) -> ! {
         let id = 1;
         let status = true;
 
-        log::info!("Building URL");
-        let mut url = String::<128>::new();
-        match write!(&mut url, "http://{BASE_URL}/api/{id}/{status}") {
-            Ok(url) => url,
-            Err(e) => {
-                log::error!("Failed to build URL: {:?}", e);
-                Timer::after(Duration::from_secs(5)).await;
-                continue;
-            }
-        };
-        log::info!("url: {url}");
-
-        log::info!("Making request");
-        let timeout = with_timeout(Duration::from_secs(10), async {
-            let mut request = match http_client.request(request::Method::POST, &url).await {
-                Ok(req) => req,
-                Err(e) => {
-                    log::error!("Failed to make HTTP request: {:?}", e);
-                    return;
-                }
-            };
-            match request.send(&mut rx_buffer).await {
-                Ok(resp) => log::info!("Response status: {:?}", resp.status),
-                Err(e) => {
-                    log::error!("Failed to send HTTP request: {:?}", e);
-                }
-            };
-        })
-        .await;
-
-        if timeout.is_err() {
-            log::error!("Request failed: Timeout")
-        };
+        let url = build_url(BASE_URL, id, status).await;
+        notify_server(&mut http_client, &url).await;
         Timer::after(Duration::from_millis(15_000)).await;
     }
 }
@@ -208,4 +177,54 @@ async fn connection(mut controller: WifiController<'static>) {
 #[embassy_executor::task]
 async fn net_task(stack: &'static Stack<WifiDevice<'static, WifiStaDevice>>) {
     stack.run().await
+}
+
+/// Constructs request URL to notify server of sensor status.
+/// If specified base_url is invalid, will wait 30 seconds then reset.
+async fn build_url(base_url: &str, id: i32, status: bool) -> String<128> {
+    log::info!("Building URL");
+    let mut url = String::new();
+    match write!(&mut url, "http://{base_url}/api/{id}/{status}") {
+        Ok(url) => url,
+        Err(e) => {
+            log::error!("Failed to build URL: {e:?}\nResetting after 30 seconds...");
+            Timer::after(Duration::from_secs(30)).await;
+            software_reset();
+        }
+    };
+    url
+}
+
+/// Send current status of sensor to server.
+async fn notify_server(
+    http_client: &mut HttpClient<
+        '_,
+        TcpClient<'_, WifiDevice<'static, WifiStaDevice>, 1>,
+        DnsSocket<'_, WifiDevice<'static, WifiStaDevice>>,
+    >,
+    url: &String<128>,
+) {
+    log::info!("Making request (url: {url})");
+    let mut rx_buffer = [0; 4096];
+
+    let timeout = with_timeout(Duration::from_secs(10), async {
+        let mut request = match http_client.request(request::Method::POST, url).await {
+            Ok(req) => req,
+            Err(e) => {
+                log::error!("Failed to make HTTP request: {:?}", e);
+                return;
+            }
+        };
+        match request.send(&mut rx_buffer).await {
+            Ok(resp) => log::info!("Response status: {:?}", resp.status),
+            Err(e) => {
+                log::error!("Failed to send HTTP request: {:?}", e);
+            }
+        };
+    })
+    .await;
+
+    if timeout.is_err() {
+        log::error!("Request failed: Timeout")
+    };
 }
