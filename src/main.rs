@@ -8,6 +8,8 @@ use embassy_net::tcp::client::{TcpClient, TcpClientState};
 use embassy_net::{Config, Stack, StackResources};
 use embassy_time::{with_timeout, Duration, Timer};
 use esp_backtrace as _;
+use esp_hal::clock::Clocks;
+use esp_hal::peripherals::{RADIO_CLK, TIMG0, WIFI};
 use esp_hal::{
     clock::ClockControl,
     peripherals::Peripherals,
@@ -45,29 +47,15 @@ const BASE_URL: &str = env!("URL"); //example: `XXX.XXX.XX.XX:3000`
 async fn main(spawner: Spawner) -> ! {
     esp_println::logger::init_logger_from_env();
 
+    // initialize hardware
     let peripherals = Peripherals::take();
     let system = SystemControl::new(peripherals.SYSTEM);
-    let systimer = SystemTimer::new(peripherals.SYSTIMER);
-    let mut rng = Rng::new(peripherals.RNG);
     let clocks = ClockControl::max(system.clock_control).freeze();
-    let timer = PeriodicTimer::new(
-        TimerGroup::new(peripherals.TIMG0, &clocks, None)
-            .timer0
-            .into(),
-    );
+    let rng = Rng::new(peripherals.RNG);
 
-    let init = esp_wifi::initialize(
-        EspWifiInitFor::Wifi,
-        timer,
-        rng,
-        peripherals.RADIO_CLK,
-        &clocks,
-    )
-    .unwrap();
-
-    let (wifi_interface, controller) =
-        new_with_mode(&init, peripherals.WIFI, WifiStaDevice).unwrap();
-
+    // initialize embassy
+    // TODO: simplify initialization API once esp-hal 0.20.0 is released
+    let systimer = SystemTimer::new(peripherals.SYSTIMER);
     esp_hal_embassy::init(
         &clocks,
         mk_static!(
@@ -76,38 +64,21 @@ async fn main(spawner: Spawner) -> ! {
         ),
     );
 
-    let config = Config::dhcpv4(Default::default());
-    let seed = rng.random().into();
-    let stack = &*mk_static!(
-        Stack<WifiDevice<'_, WifiStaDevice>>,
-        Stack::new(
-            wifi_interface,
-            config,
-            mk_static!(StackResources<3>, StackResources::<3>::new()),
-            seed
-        )
-    );
-
-    spawner.spawn(connection(controller)).ok();
-    spawner.spawn(net_task(stack)).ok();
-
-    let mut rx_buffer = [0; 4096];
-
-    while !stack.is_link_up() {
-        Timer::after(Duration::from_millis(500)).await;
-    }
-
-    log::info!("Waiting to get IP address...");
-    loop {
-        if let Some(config) = stack.config_v4() {
-            log::info!("Got IP: {}", config.address);
-            break;
-        }
-        Timer::after(Duration::from_millis(500)).await;
-    }
+    let stack = init_for_wifi(
+        peripherals.TIMG0,
+        peripherals.RADIO_CLK,
+        peripherals.WIFI,
+        rng,
+        &clocks,
+        &spawner,
+    )
+    .await;
 
     // TODO: when embassy_net 0.5.0 is released: `tcp_client.set_timeout(Some(Duration::from_millis(10_000)));`
     // Once implemented, the match arms below can be simplified
+
+    // create http_client to manage HTTP requests
+    let mut rx_buffer = [0; 4096];
     let client_state = TcpClientState::<1, 1024, 1024>::new();
     let tcp_client = TcpClient::new(stack, &client_state);
     let dns_client = DnsSocket::new(stack);
@@ -153,6 +124,52 @@ async fn main(spawner: Spawner) -> ! {
         };
         Timer::after(Duration::from_millis(15_000)).await;
     }
+}
+
+async fn init_for_wifi(
+    timer: TIMG0,
+    radio: RADIO_CLK,
+    wifi: WIFI,
+    mut rng: Rng,
+    clocks: &Clocks<'_>,
+    spawner: &Spawner,
+) -> &'static Stack<WifiDevice<'static, WifiStaDevice>> {
+    // initialize hardware
+    let timer = PeriodicTimer::new(TimerGroup::new(timer, clocks, None).timer0.into());
+    let init = esp_wifi::initialize(EspWifiInitFor::Wifi, timer, rng, radio, clocks).unwrap();
+    let (wifi_interface, controller) = new_with_mode(&init, wifi, WifiStaDevice).unwrap();
+
+    // initialize wifi stack
+    let config = Config::dhcpv4(Default::default());
+    let seed = rng.random().into();
+    let stack = &*mk_static!(
+        Stack<WifiDevice<'_, WifiStaDevice>>,
+        Stack::new(
+            wifi_interface,
+            config,
+            mk_static!(StackResources<3>, StackResources::<3>::new()),
+            seed
+        )
+    );
+
+    // spawn background tasks to manage wifi connection and run network tasks
+    spawner.spawn(connection(controller)).ok();
+    spawner.spawn(net_task(stack)).ok();
+
+    // wait for DHCP server to provide IP address
+    log::info!("Waiting to get IP address...");
+    while !stack.is_link_up() {
+        Timer::after(Duration::from_millis(500)).await;
+    }
+    loop {
+        if let Some(config) = stack.config_v4() {
+            log::info!("Got IP: {}", config.address);
+            break;
+        }
+        Timer::after(Duration::from_millis(500)).await;
+    }
+
+    stack
 }
 
 #[embassy_executor::task]
