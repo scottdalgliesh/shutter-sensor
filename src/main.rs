@@ -6,13 +6,17 @@ use embassy_executor::Spawner;
 use embassy_net::dns::DnsSocket;
 use embassy_net::tcp::client::{TcpClient, TcpClientState};
 use embassy_net::{Config, Stack, StackResources};
+use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
+use embassy_sync::channel::{Channel, Sender};
 use embassy_time::{with_timeout, Duration, Timer};
 use esp_backtrace as _;
 use esp_hal::clock::Clocks;
+use esp_hal::gpio::AnyInput;
 use esp_hal::peripherals::{RADIO_CLK, TIMG0, WIFI};
 use esp_hal::reset::software_reset;
 use esp_hal::{
     clock::ClockControl,
+    gpio::{Io, Level, Pull},
     peripherals::Peripherals,
     prelude::*,
     rng::Rng,
@@ -43,12 +47,13 @@ macro_rules! mk_static {
 const SSID: &str = env!("SSID");
 const PASSWORD: &str = env!("PASSWORD");
 const BASE_URL: &str = env!("URL"); //example: `XXX.XXX.XX.XX:3000`
+const DEBOUNCE_DELAY: Duration = Duration::from_millis(1);
 
 #[main]
 async fn main(spawner: Spawner) -> ! {
     esp_println::logger::init_logger_from_env();
 
-    // initialize hardware
+    // initialize peripherals
     let peripherals = Peripherals::take();
     let system = SystemControl::new(peripherals.SYSTEM);
     let clocks = ClockControl::max(system.clock_control).freeze();
@@ -65,6 +70,7 @@ async fn main(spawner: Spawner) -> ! {
         ),
     );
 
+    // initialize wifi
     let stack = init_for_wifi(
         peripherals.TIMG0,
         peripherals.RADIO_CLK,
@@ -84,14 +90,25 @@ async fn main(spawner: Spawner) -> ! {
     let dns_client = DnsSocket::new(stack);
     let mut http_client = HttpClient::new(&tcp_client, &dns_client);
 
-    loop {
-        // TODO: replace with actual status and ID from MCU
-        let id = 1;
-        let status = true;
+    // initialize hall effect sensor & channel
+    let io = Io::new(peripherals.GPIO, peripherals.IO_MUX);
+    let hall_sensor = AnyInput::new(io.pins.gpio10, Pull::Up);
+    let mut hall_sensor_state = hall_sensor.get_level();
+    static CHANNEL: Channel<CriticalSectionRawMutex, Level, 8> = Channel::new();
+    let sender = CHANNEL.sender();
+    spawner.spawn(sensor_watcher(hall_sensor, sender)).unwrap();
 
+    // monitor hall effect sensor; notify server of changes
+    loop {
+        // TODO: replace dummy ID with UUID of MAC address from MCU
+        let id = 1;
+        if let Ok(level) = with_timeout(Duration::from_secs(5), CHANNEL.receive()).await {
+            hall_sensor_state = level;
+        }
+        // sensor status: 0 -> open, 1 -> closed
+        let status = !bool::from(hall_sensor_state);
         let url = build_url(BASE_URL, id, status).await;
         notify_server(&mut http_client, &url).await;
-        Timer::after(Duration::from_millis(15_000)).await;
     }
 }
 
@@ -177,6 +194,20 @@ async fn connection(mut controller: WifiController<'static>) {
 #[embassy_executor::task]
 async fn net_task(stack: &'static Stack<WifiDevice<'static, WifiStaDevice>>) {
     stack.run().await
+}
+
+#[embassy_executor::task]
+async fn sensor_watcher(
+    mut hall_sensor: AnyInput<'static>,
+    sender: Sender<'static, CriticalSectionRawMutex, Level, 8>,
+) {
+    loop {
+        hall_sensor.wait_for_any_edge().await;
+        Timer::after(DEBOUNCE_DELAY).await;
+        let state = hall_sensor.get_level();
+        log::info!("Pin change detected. Level: {state:?}");
+        sender.send(state).await;
+    }
 }
 
 /// Constructs request URL to notify server of sensor status.
