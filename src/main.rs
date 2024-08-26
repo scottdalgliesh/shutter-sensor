@@ -43,7 +43,8 @@ macro_rules! mk_static {
     }};
 }
 
-// TODO: automatically set environment variables at compile time from .env file
+// loaded from .env file by build.rs (alternatively, see dotenvy_macro::dotenv!() - example below)
+// const SSID: &str = dotenv!("SSID");S
 const SSID: &str = env!("SSID");
 const PASSWORD: &str = env!("PASSWORD");
 const BASE_URL: &str = env!("URL"); //example: `XXX.XXX.XX.XX:3000`
@@ -52,6 +53,9 @@ const DEBOUNCE_DELAY: Duration = Duration::from_millis(1);
 #[main]
 async fn main(spawner: Spawner) -> ! {
     esp_println::logger::init_logger_from_env();
+    log::info!("URL={BASE_URL}");
+    log::info!("SSID={SSID}");
+    log::info!("PASSWORD={PASSWORD}");
 
     // initialize peripherals
     let peripherals = Peripherals::take();
