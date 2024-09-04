@@ -29,8 +29,8 @@ use esp_hal::{
 };
 use esp_wifi::{
     wifi::{
-        new_with_mode, ClientConfiguration, Configuration, WifiController, WifiDevice, WifiEvent,
-        WifiStaDevice, WifiState,
+        new_with_mode, ClientConfiguration, Configuration, WifiController, WifiDevice,
+        WifiDeviceMode, WifiEvent, WifiStaDevice, WifiState,
     },
     EspWifiInitFor,
 };
@@ -72,6 +72,9 @@ async fn main(spawner: Spawner) -> ! {
     let systimer = SystemTimer::new(peripherals.SYSTIMER).split::<Target>();
     esp_hal_embassy::init(&clocks, systimer.alarm0);
 
+    // get unique ID from MAC address
+    let id = create_id_from_mac(WifiStaDevice.mac_address());
+
     // initialize wifi
     let stack = init_for_wifi(
         peripherals.TIMG0,
@@ -102,8 +105,6 @@ async fn main(spawner: Spawner) -> ! {
 
     // monitor hall effect sensor; notify server of changes
     loop {
-        // TODO: replace dummy ID with UUID of MAC address from MCU
-        let id = 1;
         if let Ok(level) = with_timeout(Duration::from_secs(5), CHANNEL.receive()).await {
             hall_sensor_state = level;
         }
@@ -160,6 +161,16 @@ async fn init_for_wifi(
     stack
 }
 
+/// create unique ID from hardware MAC address
+fn create_id_from_mac(mac_address: [u8; 6]) -> u64 {
+    // pad array with zeros, then convert to u64
+    let mut buf = [0u8; 8];
+    buf[0..mac_address.len()].copy_from_slice(&mac_address);
+    let id = u64::from_be_bytes(buf);
+    log::info!("MAC address: {id}");
+    id
+}
+
 #[embassy_executor::task]
 async fn connection(mut controller: WifiController<'static>) {
     log::info!("start connection task");
@@ -214,7 +225,7 @@ async fn sensor_watcher(
 
 /// Constructs request URL to notify server of sensor status.
 /// If specified base_url is invalid, will wait 30 seconds then reset.
-async fn build_url(base_url: &str, id: i32, status: bool) -> String<128> {
+async fn build_url(base_url: &str, id: u64, status: bool) -> String<128> {
     log::info!("Building URL");
     let mut url = String::new();
     match write!(&mut url, "http://{base_url}/api/{id}/{status}") {
