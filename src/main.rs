@@ -21,7 +21,10 @@ use esp_hal::{
     prelude::*,
     rng::Rng,
     system::SystemControl,
-    timer::{systimer::SystemTimer, timg::TimerGroup, ErasedTimer, OneShotTimer, PeriodicTimer},
+    timer::{
+        systimer::{SystemTimer, Target},
+        timg::TimerGroup,
+    },
 };
 use esp_wifi::{
     wifi::{
@@ -58,21 +61,15 @@ async fn main(spawner: Spawner) -> ! {
     log::info!("PASSWORD={PASSWORD}");
 
     // initialize peripherals
+    // TODO: when esp-hal 0.21 is released, simplify initialization and remove &clocks refs throughout
     let peripherals = Peripherals::take();
     let system = SystemControl::new(peripherals.SYSTEM);
     let clocks = ClockControl::max(system.clock_control).freeze();
     let rng = Rng::new(peripherals.RNG);
 
     // initialize embassy
-    // TODO: simplify initialization API once esp-hal 0.20.0 is released
-    let systimer = SystemTimer::new(peripherals.SYSTIMER);
-    esp_hal_embassy::init(
-        &clocks,
-        mk_static!(
-            [OneShotTimer<ErasedTimer>; 1],
-            [OneShotTimer::new(systimer.alarm0.into())]
-        ),
-    );
+    let systimer = SystemTimer::new(peripherals.SYSTIMER).split::<Target>();
+    esp_hal_embassy::init(&clocks, systimer.alarm0);
 
     // initialize wifi
     let stack = init_for_wifi(
@@ -86,7 +83,7 @@ async fn main(spawner: Spawner) -> ! {
     .await;
 
     // TODO: when embassy_net 0.5.0 is released: `tcp_client.set_timeout(Some(Duration::from_millis(10_000)));`
-    // Once implemented, the match arms below can be simplified
+    // Once implemented, the match arms in notify_server() can be simplified
 
     // create http_client to manage HTTP requests
     let client_state = TcpClientState::<1, 1024, 1024>::new();
@@ -125,7 +122,7 @@ async fn init_for_wifi(
     spawner: &Spawner,
 ) -> &'static Stack<WifiDevice<'static, WifiStaDevice>> {
     // initialize hardware
-    let timer = PeriodicTimer::new(TimerGroup::new(timer, clocks, None).timer0.into());
+    let timer = TimerGroup::new(timer, clocks).timer0;
     let init = esp_wifi::initialize(EspWifiInitFor::Wifi, timer, rng, radio, clocks).unwrap();
     let (wifi_interface, controller) = new_with_mode(&init, wifi, WifiStaDevice).unwrap();
 
