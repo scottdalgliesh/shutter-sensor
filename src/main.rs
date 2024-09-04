@@ -3,22 +3,23 @@
 
 use core::fmt::Write;
 use embassy_executor::Spawner;
-use embassy_net::dns::DnsSocket;
-use embassy_net::tcp::client::{TcpClient, TcpClientState};
-use embassy_net::{Config, Stack, StackResources};
-use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
-use embassy_sync::channel::{Channel, Sender};
+use embassy_net::{
+    dns::DnsSocket,
+    tcp::client::{TcpClient, TcpClientState},
+    Config, Stack, StackResources,
+};
+use embassy_sync::{
+    blocking_mutex::raw::CriticalSectionRawMutex,
+    channel::{Channel, Sender},
+};
 use embassy_time::{with_timeout, Duration, Timer};
 use esp_backtrace as _;
-use esp_hal::clock::Clocks;
-use esp_hal::gpio::AnyInput;
-use esp_hal::peripherals::{RADIO_CLK, TIMG0, WIFI};
-use esp_hal::reset::software_reset;
 use esp_hal::{
-    clock::ClockControl,
-    gpio::{Io, Level, Pull},
-    peripherals::Peripherals,
+    clock::{ClockControl, Clocks},
+    gpio::{AnyInput, Io, Level, Pull},
+    peripherals::{Peripherals, RADIO_CLK, TIMG0, WIFI},
     prelude::*,
+    reset::software_reset,
     rng::Rng,
     system::SystemControl,
     timer::{
