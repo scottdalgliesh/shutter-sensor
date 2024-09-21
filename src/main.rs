@@ -37,7 +37,7 @@ use esp_wifi::{
 use heapless::String;
 use reqwless::{client::HttpClient, request};
 
-// When you are okay with using a nightly compiler it's better to use https://docs.rs/static_cell/2.1.0/static_cell/macro.make_static.html
+// Alternatively could use https://docs.rs/static_cell/2.1.0/static_cell/macro.make_static.html
 macro_rules! mk_static {
     ($t:ty,$val:expr) => {{
         static STATIC_CELL: static_cell::StaticCell<$t> = static_cell::StaticCell::new();
@@ -115,6 +115,7 @@ async fn main(spawner: Spawner) -> ! {
     }
 }
 
+/// Initialize hardware for wifi and spawn background tasks to initiate and manage wifi connection  
 async fn init_for_wifi(
     timer: TIMG0,
     radio: RADIO_CLK,
@@ -171,6 +172,7 @@ fn create_id_from_mac(mac_address: [u8; 6]) -> u64 {
     id
 }
 
+/// background task to connect to wifi network, then manage reconnection if necessary
 #[embassy_executor::task]
 async fn connection(mut controller: WifiController<'static>) {
     log::info!("start connection task");
@@ -204,11 +206,13 @@ async fn connection(mut controller: WifiController<'static>) {
     }
 }
 
+/// background task to continuously run the network stack
 #[embassy_executor::task]
 async fn net_task(stack: &'static Stack<WifiDevice<'static, WifiStaDevice>>) {
     stack.run().await
 }
 
+/// background task to monitor hall effect sensor and report activity to main task via provided channel
 #[embassy_executor::task]
 async fn sensor_watcher(
     mut hall_sensor: AnyInput<'static>,
