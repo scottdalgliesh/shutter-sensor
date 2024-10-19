@@ -1,20 +1,16 @@
 [package]
-name = "shutter-sensor"
-version = "0.1.0"
 authors = ["Scott Dalgliesh <scott.t.dalgliesh@gmail.com>"]
 edition = "2021"
 license = "MIT OR Apache-2.0"
+name    = "shutter-sensor"
+version = "0.1.0"
 
 [dependencies]
 embassy-executor = { version = "0.6.0", features = ["task-arena-size-40960"] }
-embassy-net = { version = "0.4.0", features = [
-    "dns",
-    "tcp",
-    "udp",
-    "dhcpv4",
-    "medium-ethernet",
-] }
+embassy-net = { version = "0.4.0", features = ["dhcpv4", "dns", "medium-ethernet", "tcp", "udp"] }
+embassy-sync = "0.6.0"
 embassy-time = { version = "0.3.2" }
+esp-alloc = "0.5.0"
 esp-backtrace = { version = "0.14.2", features = [
     "esp32c3",
     "exception-handler",
@@ -24,7 +20,6 @@ esp-backtrace = { version = "0.14.2", features = [
 esp-hal = { version = "0.21.1", features = ["esp32c3"] }
 esp-hal-embassy = { version = "0.4.0", features = ["esp32c3", "integrated-timers"] }
 esp-println = { version = "0.12.0", features = ["esp32c3", "log"] }
-log = { version = "0.4.22" }
 esp-wifi = { version = "0.10.1", features = [
     "async",
     "embassy-net",
@@ -34,6 +29,8 @@ esp-wifi = { version = "0.10.1", features = [
     "wifi-default",
 ] }
 heapless = { version = "0.8.0", default-features = false }
+log = { version = "0.4.22" }
+reqwless = "0.12.1"
 smoltcp = { version = "0.11.0", default-features = false, features = [
     "medium-ethernet",
     "proto-dhcpv4",
@@ -46,9 +43,6 @@ smoltcp = { version = "0.11.0", default-features = false, features = [
     "socket-udp",
 ] }
 static_cell = { version = "2.1.0", features = ["nightly"] }
-reqwless = "0.12.1"
-embassy-sync = "0.6.0"
-esp-alloc = "0.5.0"
 
 [profile.dev]
 # Rust debug is too slow.
@@ -56,13 +50,13 @@ esp-alloc = "0.5.0"
 opt-level = "s"
 
 [profile.release]
-codegen-units = 1        # LLVM can perform better optimizations using a single thread
-debug = 2
+codegen-units    = 1     # LLVM can perform better optimizations using a single thread
+debug            = 2
 debug-assertions = false
-incremental = false
-lto = 'fat'
-opt-level = 's'
-overflow-checks = false
+incremental      = false
+lto              = 'fat'
+opt-level        = 's'
+overflow-checks  = false
 
 [build-dependencies]
 dotenvy = "0.15.7"
