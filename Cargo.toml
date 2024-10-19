@@ -14,19 +14,18 @@ embassy-net = { version = "0.4.0", features = [
     "dhcpv4",
     "medium-ethernet",
 ] }
-embassy-time = { version = "0.3.1", features = ["generic-queue-8"] }
-esp-backtrace = { version = "0.14.0", features = [
+embassy-time = { version = "0.3.2" }
+esp-backtrace = { version = "0.14.2", features = [
     "esp32c3",
     "exception-handler",
     "panic-handler",
     "println",
 ] }
-esp-hal = { version = "0.20.1", features = ["esp32c3", "async"] }
-esp-hal-embassy = { version = "0.3.0", features = ["esp32c3"] }
-esp-println = { version = "0.11.0", features = ["esp32c3", "log"] }
-log = { version = "0.4.21" }
-embedded-io-async = "0.6.1"
-esp-wifi = { version = "0.9.1", features = [
+esp-hal = { version = "0.21.1", features = ["esp32c3"] }
+esp-hal-embassy = { version = "0.4.0", features = ["esp32c3", "integrated-timers"] }
+esp-println = { version = "0.12.0", features = ["esp32c3", "log"] }
+log = { version = "0.4.22" }
+esp-wifi = { version = "0.10.1", features = [
     "async",
     "embassy-net",
     "esp32c3",
@@ -49,6 +48,7 @@ smoltcp = { version = "0.11.0", default-features = false, features = [
 static_cell = { version = "2.1.0", features = ["nightly"] }
 reqwless = "0.12.1"
 embassy-sync = "0.6.0"
+esp-alloc = "0.5.0"
 
 [profile.dev]
 # Rust debug is too slow.

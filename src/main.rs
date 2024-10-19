@@ -1,6 +1,8 @@
 #![no_std]
 #![no_main]
 
+extern crate alloc;
+
 use core::fmt::Write;
 use embassy_executor::Spawner;
 use embassy_net::{
@@ -13,15 +15,14 @@ use embassy_sync::{
     channel::{Channel, Sender},
 };
 use embassy_time::{with_timeout, Duration, Timer};
+use esp_alloc as _;
 use esp_backtrace as _;
 use esp_hal::{
-    clock::{ClockControl, Clocks},
-    gpio::{AnyInput, Io, Level, Pull},
-    peripherals::{Peripherals, RADIO_CLK, TIMG0, WIFI},
-    prelude::*,
+    clock::CpuClock,
+    gpio::{Input, Io, Level, Pull},
+    peripherals::{RADIO_CLK, TIMG0, WIFI},
     reset::software_reset,
     rng::Rng,
-    system::SystemControl,
     timer::{
         systimer::{SystemTimer, Target},
         timg::TimerGroup,
@@ -48,40 +49,40 @@ macro_rules! mk_static {
 }
 
 // loaded from .env file by build.rs (alternatively, see dotenvy_macro::dotenv!() - example below)
-// const SSID: &str = dotenv!("SSID");S
+// const SSID: &str = dotenv!("SSID");
 const SSID: &str = env!("SSID");
 const PASSWORD: &str = env!("PASSWORD");
 const BASE_URL: &str = env!("URL"); //example: `XXX.XXX.XX.XX:3000`
 const DEBOUNCE_DELAY: Duration = Duration::from_millis(1);
 
-#[main]
+#[esp_hal_embassy::main]
 async fn main(spawner: Spawner) -> ! {
+    esp_alloc::heap_allocator!(72 * 1024);
+
     esp_println::logger::init_logger_from_env();
     log::info!("URL={BASE_URL}");
     log::info!("SSID={SSID}");
     log::info!("PASSWORD={PASSWORD}");
 
     // initialize peripherals
-    // TODO: when esp-hal 0.21 is released, simplify initialization and remove &clocks refs throughout
-    let peripherals = Peripherals::take();
-    let system = SystemControl::new(peripherals.SYSTEM);
-    let clocks = ClockControl::max(system.clock_control).freeze();
+    let peripherals = esp_hal::init({
+        let mut config = esp_hal::Config::default();
+        config.cpu_clock = CpuClock::max();
+        config
+    });
     let rng = Rng::new(peripherals.RNG);
 
     // initialize embassy
     let systimer = SystemTimer::new(peripherals.SYSTIMER).split::<Target>();
-    esp_hal_embassy::init(&clocks, systimer.alarm0);
-
-    // get unique ID from MAC address
-    let id = create_id_from_mac(WifiStaDevice.mac_address());
+    esp_hal_embassy::init(systimer.alarm0);
 
     // initialize wifi
+    let id = create_id_from_mac(WifiStaDevice.mac_address());
     let stack = init_for_wifi(
         peripherals.TIMG0,
         peripherals.RADIO_CLK,
         peripherals.WIFI,
         rng,
-        &clocks,
         &spawner,
     )
     .await;
@@ -97,7 +98,7 @@ async fn main(spawner: Spawner) -> ! {
 
     // initialize hall effect sensor & channel
     let io = Io::new(peripherals.GPIO, peripherals.IO_MUX);
-    let hall_sensor = AnyInput::new(io.pins.gpio10, Pull::Up);
+    let hall_sensor = Input::new(io.pins.gpio10, Pull::Up);
     let mut hall_sensor_state = hall_sensor.get_level();
     static CHANNEL: Channel<CriticalSectionRawMutex, Level, 8> = Channel::new();
     let sender = CHANNEL.sender();
@@ -115,18 +116,17 @@ async fn main(spawner: Spawner) -> ! {
     }
 }
 
-/// Initialize hardware for wifi and spawn background tasks to initiate and manage wifi connection  
+/// Initialize hardware for wifi and spawn background tasks to initiate and manage wifi connection
 async fn init_for_wifi(
     timer: TIMG0,
     radio: RADIO_CLK,
     wifi: WIFI,
     mut rng: Rng,
-    clocks: &Clocks<'_>,
     spawner: &Spawner,
 ) -> &'static Stack<WifiDevice<'static, WifiStaDevice>> {
     // initialize hardware
-    let timer = TimerGroup::new(timer, clocks).timer0;
-    let init = esp_wifi::initialize(EspWifiInitFor::Wifi, timer, rng, radio, clocks).unwrap();
+    let timer = TimerGroup::new(timer).timer0;
+    let init = esp_wifi::init(EspWifiInitFor::Wifi, timer, rng, radio).unwrap();
     let (wifi_interface, controller) = new_with_mode(&init, wifi, WifiStaDevice).unwrap();
 
     // initialize wifi stack
@@ -215,7 +215,7 @@ async fn net_task(stack: &'static Stack<WifiDevice<'static, WifiStaDevice>>) {
 /// background task to monitor hall effect sensor and report activity to main task via provided channel
 #[embassy_executor::task]
 async fn sensor_watcher(
-    mut hall_sensor: AnyInput<'static>,
+    mut hall_sensor: Input<'static>,
     sender: Sender<'static, CriticalSectionRawMutex, Level, 8>,
 ) {
     loop {
