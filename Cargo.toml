@@ -2,7 +2,7 @@
 authors = ["Scott Dalgliesh <scott.t.dalgliesh@gmail.com>"]
 edition = "2021"
 license = "MIT OR Apache-2.0"
-name    = "shutter-sensor"
+name = "shutter-sensor"
 version = "0.1.0"
 
 [dependencies]
@@ -50,13 +50,13 @@ static_cell = { version = "2.1.0", features = ["nightly"] }
 opt-level = "s"
 
 [profile.release]
-codegen-units    = 1     # LLVM can perform better optimizations using a single thread
-debug            = 2
+codegen-units = 1        # LLVM can perform better optimizations using a single thread
+debug = 2
 debug-assertions = false
-incremental      = false
-lto              = 'fat'
-opt-level        = 's'
-overflow-checks  = false
+incremental = false
+lto = 'fat'
+opt-level = 's'
+overflow-checks = false
 
 [build-dependencies]
 dotenvy = "0.15.7"
